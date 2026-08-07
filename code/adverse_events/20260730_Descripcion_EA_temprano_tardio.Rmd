@@ -1,0 +1,2160 @@
+---
+title: "Tablas de la descripción de los eventos adversos según tiempo de vacunación"
+author: "Proyecto Mpox"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: united
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  word_document:
+    number_sections: yes
+    toc: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(dplyr)
+library(modeest)
+library(ggplot2)
+library(ggThemeAssist)
+library(tidyr)
+library(lubridate)
+library(openxlsx)
+library(readxl)
+library(boot)
+library(stringr)
+#devtools::install_github("kupietz/kableExtra")
+library(printr)
+library(rstatix)
+```
+
+
+```{r, include=FALSE}
+# ---- Datos del ECA  ---- Cargar el data frame:
+
+datos_eca<-read.csv("01. CRF Datos y criterios/1CRFDatosYCriteriosR_DATA_2025-04-23_1456.csv",header = T, encoding = "Latin1")
+
+# Quitar los NA de los ID
+
+datos_eca<-datos_eca[!is.na(datos_eca$numero_documento),]
+
+```
+
+
+```{r, include=FALSE}
+# ---- Datos de la cohorte  ----
+
+datos_poseca<-read.csv("01. CRF Datos y criterios (nuevo estudio)/1CRFDatosYCriteriosN_DATA_2025-04-23_1457.csv",header = T, encoding = "Latin1")
+
+# Quitar los NA de los ID
+
+datos_poseca<-datos_poseca[!is.na(datos_poseca$numero_documento),]
+
+```
+
+
+
+```{r,include=FALSE}
+# Juntar tablas para conformar toda la cohorte
+
+datos_cohorte <- bind_rows(datos_eca,datos_poseca)
+
+# - Codificar codigo del paciente:
+
+datos_cohorte$codigo_participante<-paste0(datos_cohorte$codigo8,
+                                          "-",datos_cohorte$record_id)
+
+# - Quitar espacios en blanco sobrantes
+
+datos_cohorte<-datos_cohorte%>%
+  mutate(codigo_participante = gsub("\\s+", "", codigo_participante))%>%
+  mutate(codigo_participante=str_trim(codigo_participante))
+```
+
+```{r,include=FALSE}
+# Cargar base de vacunación y crear variable indicadora de los vacunados
+
+vacuna<-read.csv("02. CRF Vacunacion/2CRFVacunacin_DATA_2025-04-23_1458.csv",header = T, encoding = "Latin1")
+
+# - Quitar espacios en blanco sobrantes de la variable codigo_participante de la base de los vacunados:
+
+vacuna <- vacuna %>%
+  mutate(codigo_participante = gsub("\\s+", "", codigo_participante))%>%
+  mutate(codigo_participante=str_trim(codigo_participante))
+
+#- Identificar pacientes vacunados creando variable dicotómica
+
+datos_cohorte$vacunados<-ifelse(datos_cohorte$codigo_participante %in% c(vacuna$codigo_participante),1,0)
+
+sum(datos_cohorte$vacunados)
+
+```
+
+```{r, include=FALSE}
+# Filtrar la base solo de los vacunados
+
+datos_vacunados<-datos_cohorte[datos_cohorte$vacunados == 1,]
+```
+
+
+```{r,include=FALSE}
+# Cargar base de datos antigua de los EA
+ea_antigua<-read.csv("05. CRF EA antiguo/5CRFEventoAdversoANT_DATA_2025-04-23_1501.csv",header = T, encoding = "Latin1")
+
+# - Quitar espacios en blanco sobrantes de la variable participant_id de la base de los EA antiguos:
+
+ea_antigua <- ea_antigua %>%
+  mutate(participant_id = gsub("\\s+", "", participant_id))%>%
+  mutate(participant_id = str_trim(participant_id))
+
+# - Codificar la categoría 7 de la variable desenlace ('sin información' no tendrá ningún valor)
+
+ea_antigua$desenlace_del_evento_adver[ea_antigua$desenlace_del_evento_adver == 7]<-0
+
+
+# Cargar base de datos nueva de los EA
+ea_nueva<-read.csv("05. CRF EA nuevo/5CRFEventoAdversoNUE_DATA_2025-04-23_1502.csv",header = T, encoding = "Latin1")
+
+# - Quitar espacios en blanco sobrantes de la variable participant_id de la base de los EA nuevos:
+
+ea_nueva <- ea_nueva %>%
+  mutate(participant_id = gsub("\\s+", "", participant_id))%>%
+  mutate(participant_id = str_trim(participant_id))
+
+# - Codificar la categoría 7 de la variable desenlace ('sin información' no tendrá ningún valor)
+
+ea_nueva$desenlace_evento[ea_nueva$desenlace_evento == 7 & !is.na(ea_nueva$desenlace_evento)]<-0
+
+
+```
+
+```{r,include=FALSE}
+# Crear variable dicotómica señalando los participantes vacunados que partenecen a cada formato
+
+datos_vacunados$ea_antigua<-ifelse(datos_vacunados$codigo_participante %in% c(ea_antigua$participant_id),1,0)
+
+datos_vacunados$ea_nueva<-ifelse(datos_vacunados$codigo_participante %in% c(ea_nueva$participant_id),1,0)
+```
+
+```{r,include=FALSE}
+# Codificar datos de confirmación del grupo
+
+# -- Confirmación:
+
+datos_vacunados$participante_convive_virus<-ifelse(datos_vacunados$participante_convive_virus == 1, "Si","No")
+
+datos_vacunados$participante_prep[datos_vacunados$participante_prep == 1]<-"Si"
+datos_vacunados$participante_prep[datos_vacunados$participante_prep == 2]<-"No"
+
+datos_vacunados$factor_riesgo<-ifelse(datos_vacunados$factor_riesgo == 1, "Si","No")
+
+#View(datos_vacunados[,c("participante_convive_virus","participante_prep","factor_riesgo")])
+
+
+# - otra variable
+
+datos_vacunados$confirmacion_entidad[datos_vacunados$participante_convive_virus == "Si"]<-"VIH"
+
+datos_vacunados$confirmacion_entidad[is.na(datos_vacunados$confirmacion_entidad) & datos_vacunados$participante_convive_virus == "No" &
+                             datos_vacunados$participante_prep == "Si" & datos_vacunados$factor_riesgo == "No"]<-"Prep"
+
+datos_vacunados$confirmacion_entidad[is.na(datos_vacunados$confirmacion_entidad) & datos_vacunados$participante_convive_virus == "No" &
+                             datos_vacunados$participante_prep == "No" & datos_vacunados$factor_riesgo == "Si"]<-"Factor de riesgo"
+
+#View(datos_vacunados[,c("participante_convive_virus","participante_prep","factor_riesgo","confirmacion_entidad")])
+
+
+datos_vacunados$confirmacion_entidad<-factor(datos_vacunados$confirmacion_entidad,levels = c("VIH","Prep","Factor de riesgo"))
+
+
+```
+
+```{r,include=FALSE}
+# ---- Institución participante
+
+datos_vacunados$institucion_participante[datos_vacunados$institucion_participante == 1]<-"Colsanitas"
+datos_vacunados$institucion_participante[datos_vacunados$institucion_participante == 2]<-"San Ignacio"
+datos_vacunados$institucion_participante[datos_vacunados$institucion_participante == 4]<-"Infectoclinicos"
+```
+
+
+```{r,include=FALSE}
+#Verificar número de pacientes en el formato antiguo
+ea_antigua_n<-ea_antigua%>%
+  rename(codigo_participante = participant_id)%>%
+  group_by(codigo_participante)%>%summarise(n())
+
+#Verificar con suma de la base de vacunados
+sum(datos_vacunados$ea_antigua)
+
+# HAY 81 PACIENTES EN ESTRE REGISTRO DE EA ANTIGUO, CON FORMATOS REPETIDOS
+
+```
+
+```{r,include=FALSE}
+#Incidencia acumulada de EA
+datos_vacunados$presentar_ea<-ifelse(datos_vacunados$ea_antigua == 0 & datos_vacunados$ea_nueva == 0,0,1)
+
+sum(datos_vacunados$presentar_ea)
+```
+
+```{r,include=FALSE}
+datos_vacunados<-datos_vacunados%>%
+  mutate(codigo_participante = gsub("\\s+", "", codigo_participante))%>%
+  mutate(codigo_participante=str_trim(codigo_participante))
+```
+
+
+```{r,include=FALSE}
+#Codificar los EA del formato antiguo según si son serios o no
+
+#View(ea_antigua[,c("participant_id","event_start_data","sintomas_presentados_des",
+#                   "intensidad_evento",
+#                   "desenlace_del_evento_adver",
+#                   "causalidad")])
+
+# --- Filtrar los EA no serios
+
+# Señalar los primeros EA según la fecha de inicio del EA
+ea_antigua <- ea_antigua %>%
+  group_by(participant_id) %>%
+  arrange(participant_id, event_start_data) %>%
+  mutate(ea_primero = ifelse(row_number() == 1, 1, 0))%>%
+  rename(codigo_participante = participant_id)
+
+#View(ea_antigua[,c("codigo_participante","event_start_data","sintomas_presentados_des",
+#                   "intensidad_evento",
+#                   "desenlace_del_evento_adver",
+#                   "causalidad","ea_primero")])
+
+# Calcular la gravedad de los EA, primero con la intensidad
+ea_antigua_intensidad<-ea_antigua %>%
+  filter(!is.na(intensidad_evento))%>%
+  group_by(codigo_participante)%>%
+  summarise(intensidad_evento = max(intensidad_evento,na.rm = T))%>%
+  mutate(ea_intensidad=rep(1))
+
+
+# Adjuntar la identificación de los EA más graves
+
+ea_antigua<-merge(ea_antigua,ea_antigua_intensidad,all.x = T,
+                  by=c("codigo_participante","intensidad_evento"))
+
+ea_antigua$ea_intensidad[is.na(ea_antigua$ea_intensidad)]<-0
+
+
+# Calcular la gravedad de los EA, seguido de la causalidad
+ea_antigua_causalidad<-ea_antigua %>%
+  filter(ea_intensidad == 1)%>%
+  group_by(codigo_participante)%>%
+  summarise(causalidad = max(causalidad,na.rm = T),
+            ea_intensidad = max(ea_intensidad,na.rm = T))%>%
+  mutate(ea_causalidad=rep(1))
+
+
+# Adjuntar la identificación de los EA más graves
+
+ea_antigua<-merge(ea_antigua,ea_antigua_causalidad,all.x = T,
+                  by=c("codigo_participante","ea_intensidad","causalidad"))
+
+ea_antigua$ea_causalidad[is.na(ea_antigua$ea_causalidad)]<-0
+
+
+# Calcular la gravedad de los EA, seguido del desenlace
+ea_antigua_desenlace<-ea_antigua %>%
+  filter(ea_intensidad == 1 & ea_causalidad == 1)%>%
+  group_by(codigo_participante)%>%
+  summarise(desenlace_del_evento_adver = max(desenlace_del_evento_adver),
+            ea_causalidad=max(ea_causalidad,na.rm = T),
+            ea_intensidad=max(ea_intensidad,na.rm = T))%>%
+  mutate(ea_desenlace=rep(1))
+
+
+# Adjuntar la identificación de los EA más graves
+
+ea_antigua<-merge(ea_antigua,ea_antigua_desenlace,all.x = T,
+                  by=c("codigo_participante","ea_intensidad",
+                       "ea_causalidad","desenlace_del_evento_adver"))
+
+ea_antigua$ea_desenlace[is.na(ea_antigua$ea_desenlace)]<-0
+
+
+# Seleccionar las columnas de interés y los eventos
+
+ea_antiguos<-ea_antigua %>%
+  select(codigo_participante,
+         intensidad_evento,causalidad,desenlace_del_evento_adver,
+         ea_primero,ea_intensidad,ea_causalidad,ea_desenlace)%>%
+  filter(ea_intensidad == 1 & ea_causalidad == 1 & ea_desenlace == 1)%>%  #filtrar los que son más graves
+  unique()
+  
+# De los ea filtrados por gravedad, hay ea repetidos por paciente. De estos, seleccionar el que se registró primero:  
+ea_antiguos_sel<-ea_antiguos %>%
+  group_by(codigo_participante) %>%
+  summarise(ea_primero=max(ea_primero,na.rm = T))%>%
+  mutate(ea_noserio_antiguo=rep(1))
+
+
+ea_antiguos_selec<-merge(ea_antiguos,ea_antiguos_sel,all.x = T,by=c("codigo_participante",
+                                                              "ea_primero"))
+
+ea_antiguos_selec<-ea_antiguos_selec%>%
+  filter(!is.na(ea_noserio_antiguo))%>%
+  select(codigo_participante,intensidad_evento,causalidad,
+         desenlace_del_evento_adver)%>%
+  rename(intensidad_ea_antiguo=intensidad_evento,
+         causalidad_ea_antiguo=causalidad,
+         desenlace_ea_antiguo=desenlace_del_evento_adver)
+```
+
+
+```{r,include=FALSE}
+# --- Filtrar los EA no serios del nuevo formato
+
+# Señalar los primeros EA según la fecha de inicio del EA
+ea_nueva <- ea_nueva %>%
+  group_by(participant_id) %>%
+  arrange(participant_id, event_start_data) %>%
+  mutate(ea_primero = ifelse(row_number() == 1, 1, 0))%>%
+  rename(codigo_participante = participant_id)%>%
+  mutate(codigo_participante = gsub("\\s+", "", codigo_participante)) #Quitar todos los espacios en blanco
+         
+
+#View(ea_antigua[,c("codigo_participante","event_start_data","sintomas_presentados_des",
+#                   "intensidad_evento",
+#                   "desenlace_del_evento_adver",
+#                   "causalidad","ea_primero")])
+
+# Calcular la gravedad de los EA, primero con la intensidad
+ea_nueva_intensidad<-ea_nueva %>%
+  filter(tipo_evento == 2)%>%
+  group_by(codigo_participante)%>%
+  summarise(intensidad_evento = max(intensidad_evento,na.rm = T))%>%
+  mutate(ea_intensidad=rep(1))
+
+
+# Adjuntar la identificación de los EA más graves
+
+ea_nueva<-merge(ea_nueva,ea_nueva_intensidad,all.x = T,
+                  by=c("codigo_participante","intensidad_evento"))
+
+ea_nueva$ea_intensidad[is.na(ea_nueva$ea_intensidad)]<-0
+
+
+# Calcular la gravedad de los EA, seguido de la causalidad
+ea_nueva_causalidad<-ea_nueva %>%
+  filter(ea_intensidad == 1)%>%
+  group_by(codigo_participante)%>%
+  summarise(causalidad_evento = max(causalidad_evento,na.rm = T),
+            ea_intensidad = max(ea_intensidad,na.rm = T))%>%
+  mutate(ea_causalidad=rep(1))
+
+
+# Adjuntar la identificación de los EA más graves
+
+ea_nueva<-merge(ea_nueva,ea_nueva_causalidad,all.x = T,
+                  by=c("codigo_participante","ea_intensidad","causalidad_evento"))
+
+ea_nueva$ea_causalidad[is.na(ea_nueva$ea_causalidad)]<-0
+
+
+# Calcular la gravedad de los EA, seguido del desenlace
+ea_nueva$desenlace_evento[is.na(ea_nueva$desenlace_evento)]<-7
+
+ea_nueva_desenlace<-ea_nueva %>%
+  filter(ea_intensidad == 1 & ea_causalidad == 1)%>%
+  group_by(codigo_participante)%>%
+  summarise(desenlace_evento = max(desenlace_evento,na.rm = T),
+            ea_causalidad=max(ea_causalidad,na.rm = T),
+            ea_intensidad=max(ea_intensidad,na.rm = T))%>%
+  mutate(ea_desenlace=rep(1))
+
+
+# Adjuntar la identificación de los EA más graves
+
+ea_nueva<-merge(ea_nueva,ea_nueva_desenlace,all.x = T,
+                  by=c("codigo_participante","ea_intensidad",
+                       "ea_causalidad","desenlace_evento"))
+
+ea_nueva$ea_desenlace[is.na(ea_nueva$ea_desenlace)]<-0
+
+
+# Seleccionar las columnas de interés y los eventos
+
+ea_nuevos<-ea_nueva %>%
+  select(codigo_participante,
+         intensidad_evento,causalidad_evento,desenlace_evento,
+         ea_primero,ea_intensidad,ea_causalidad,ea_desenlace)%>%
+  filter(ea_intensidad == 1 & ea_causalidad == 1 & ea_desenlace == 1)%>%  #filtrar los que son más graves
+  unique()
+  
+  
+ea_nuevos_sel<-ea_nuevos %>%
+  group_by(codigo_participante) %>%
+  summarise(ea_primero=max(ea_primero,na.rm = T))%>%
+  mutate(ea_noserio_nuevo=rep(1))
+
+
+ea_nuevos_selec<-merge(ea_nuevos,ea_nuevos_sel,all.x = T,by=c("codigo_participante",
+                                                              "ea_primero"))
+
+ea_nuevos_selec<-ea_nuevos_selec%>%
+  filter(!is.na(ea_noserio_nuevo))%>%
+  select(codigo_participante,intensidad_evento,causalidad_evento,
+         desenlace_evento)%>%
+  rename(intensidad_ea_nuevo=intensidad_evento,
+         causalidad_ea_nuevo=causalidad_evento,
+         desenlace_ea_nuevo=desenlace_evento)
+```
+
+
+```{r,include=FALSE}
+# Filtrar los que tuvieron solamente evento en el formato antiguo
+
+pacientes_ea_antiguo<-datos_vacunados[datos_vacunados$ea_antigua == 1 & datos_vacunados$ea_nueva == 0,c("codigo_participante","institucion_participante",
+                                              "confirmacion_entidad")]
+
+pacientes_ea_antiguo<-merge(pacientes_ea_antiguo,
+                           ea_antiguos_selec,
+                           all.x = T,
+                           by=c("codigo_participante"))
+
+pacientes_ea_antiguo <-pacientes_ea_antiguo %>%
+  rename(intensidad_ea=intensidad_ea_antiguo,
+         causalidad_ea=causalidad_ea_antiguo,
+         desenlace_ea=desenlace_ea_antiguo)
+
+pacientes_ea_antiguo$formato<-rep("EA antiguo")
+
+
+# Filtrar los que tuvieron solamente evento en el formato nuevo
+
+pacientes_ea_nuevo<-datos_vacunados[datos_vacunados$ea_antigua == 0 & datos_vacunados$ea_nueva == 1,c("codigo_participante","institucion_participante",
+                                              "confirmacion_entidad")]
+
+pacientes_ea_nuevo<-merge(pacientes_ea_nuevo,
+                           ea_nuevos_selec,
+                           all.x = T,
+                           by=c("codigo_participante"))
+
+pacientes_ea_nuevo <-pacientes_ea_nuevo %>%
+  rename(intensidad_ea=intensidad_ea_nuevo,
+         causalidad_ea=causalidad_ea_nuevo,
+         desenlace_ea=desenlace_ea_nuevo)
+
+pacientes_ea_nuevo$formato<-rep("EA nuevo")
+
+
+# Filtrar los que tuvieron evento en el formato viejo y nuevo
+
+pacientes_ea_<-datos_vacunados[datos_vacunados$ea_antigua == 1 & datos_vacunados$ea_nueva == 1,c("codigo_participante","institucion_participante",
+                                              "confirmacion_entidad")]
+
+pacientes_ea_1<-merge(pacientes_ea_,
+                           ea_antiguos_selec,
+                           all.x = T,
+                           by=c("codigo_participante"))
+
+pacientes_ea_1<-pacientes_ea_1%>%
+  rename(intensidad_ea=intensidad_ea_antiguo,
+         causalidad_ea=causalidad_ea_antiguo,
+         desenlace_ea=desenlace_ea_antiguo)
+
+pacientes_ea_1$formato<-rep("EA antiguo")
+
+
+
+pacientes_ea_2<-merge(pacientes_ea_,
+                           ea_nuevos_selec,
+                           all.x = T,
+                           by=c("codigo_participante"))
+
+pacientes_ea_2 <-pacientes_ea_2 %>%
+  rename(intensidad_ea=intensidad_ea_nuevo,
+         causalidad_ea=causalidad_ea_nuevo,
+         desenlace_ea=desenlace_ea_nuevo)
+
+pacientes_ea_2$formato<-rep("EA nuevo")
+
+
+# - Hacer rbind de las bases
+
+pacientes_ea_antinuev<-rbind(pacientes_ea_1,pacientes_ea_2)
+
+```
+
+```{r,include=FALSE}
+# Seleccionar el evento de mayor gravedad para los que tuvieron EA en ambos formatos
+
+# Calcular la gravedad de los EA, primero con la intensidad
+ea_antinuev_intensidad<-pacientes_ea_antinuev %>%
+  group_by(codigo_participante)%>%
+  summarise(intensidad_ea = max(intensidad_ea,na.rm = T))%>%
+  mutate(ea_intensidad=rep(1))
+
+
+# Adjuntar la identificación de los EA más graves
+
+pacientes_ea_antinuev<-merge(pacientes_ea_antinuev,
+                             ea_antinuev_intensidad,all.x = T,
+                  by=c("codigo_participante","intensidad_ea"))
+
+pacientes_ea_antinuev$ea_intensidad[is.na(pacientes_ea_antinuev$ea_intensidad)]<-0
+
+
+# Calcular la gravedad de los EA, seguido de la causalidad
+ea_antinuev_causalidad<-pacientes_ea_antinuev %>%
+  filter(ea_intensidad == 1)%>%
+  group_by(codigo_participante)%>%
+  summarise(causalidad_ea = max(causalidad_ea,na.rm = T),
+            ea_intensidad = max(ea_intensidad,na.rm = T))%>%
+  mutate(ea_causalidad=rep(1))
+
+
+# Adjuntar la identificación de los EA más graves
+
+pacientes_ea_antinuev<-merge(pacientes_ea_antinuev,
+                             ea_antinuev_causalidad,all.x = T,
+                  by=c("codigo_participante","ea_intensidad","causalidad_ea"))
+
+pacientes_ea_antinuev$ea_causalidad[is.na(pacientes_ea_antinuev$ea_causalidad)]<-0
+
+
+# Calcular la gravedad de los EA, seguido del desenlace
+pacientes_ea_antinuev$desenlace_ea[is.na(pacientes_ea_antinuev$desenlace_ea)]<-7
+
+ea_antinuev_desenlace<-pacientes_ea_antinuev %>%
+  filter(ea_intensidad == 1 & ea_causalidad == 1)%>%
+  group_by(codigo_participante)%>%
+  summarise(desenlace_ea = max(desenlace_ea,na.rm = T),
+            ea_causalidad=max(ea_causalidad,na.rm = T),
+            ea_intensidad=max(ea_intensidad,na.rm = T))%>%
+  mutate(ea_desenlace=rep(1))
+
+
+# Adjuntar la identificación de los EA más graves
+
+pacientes_ea_antinuev<-merge(pacientes_ea_antinuev,
+                             ea_antinuev_desenlace,all.x = T,
+                  by=c("codigo_participante","ea_intensidad",
+                       "ea_causalidad","desenlace_ea"))
+
+pacientes_ea_antinuev$ea_desenlace[is.na(pacientes_ea_antinuev$ea_desenlace)]<-0
+
+
+# Seleccionar las columnas de interés y los eventos
+
+pacientes_ea_antinuevos<-pacientes_ea_antinuev %>%
+  select(codigo_participante,
+         intensidad_ea,causalidad_ea,desenlace_ea,
+         ea_intensidad,ea_causalidad,ea_desenlace)%>%
+  filter(ea_intensidad == 1 & ea_causalidad == 1 & ea_desenlace == 1)%>%  #filtrar los que son más graves
+  unique()%>%
+  mutate(seleccion=rep(1))
+  
+
+
+
+pacientes_ea_antinuev<-merge(pacientes_ea_antinuev,
+                             pacientes_ea_antinuevos[,c("codigo_participante",
+                                                     "intensidad_ea",
+                                                     "causalidad_ea",
+                                                     "desenlace_ea","seleccion")],all.x = T,
+                             by=c("codigo_participante","intensidad_ea",
+                                                     "causalidad_ea",
+                                                     "desenlace_ea"))
+
+pacientes_ea_antinuev<-pacientes_ea_antinuev%>%
+  filter(!is.na(seleccion))%>%
+  select(-ea_intensidad,
+         -ea_causalidad,
+         -ea_desenlace)
+
+n_antinuev<-pacientes_ea_antinuev%>%
+  group_by(codigo_participante)%>%
+  summarise(cantidad=n())
+
+pacientes_ea_antinuev<-merge(pacientes_ea_antinuev,n_antinuev,all.x = T,
+                             by=c("codigo_participante"))
+
+pacientes_ea_antinuev<-pacientes_ea_antinuev%>%
+  filter(!(cantidad == 2 & formato == "EA nuevo"))%>%
+  select(-seleccion,
+         -cantidad)
+
+```
+
+
+```{r,include=FALSE}
+# Juntar las bases
+
+ea_vacunados<-bind_rows(pacientes_ea_antiguo,
+                        pacientes_ea_nuevo,
+                        pacientes_ea_antinuev)
+```
+
+
+```{r,include=FALSE}
+# Filtrar los quue tienen su EA en el antiguo formato
+levels(as.factor(ea_vacunados$formato))
+
+ea_vacunados_antiguo<-ea_vacunados[ea_vacunados$formato == "EA antiguo",]
+
+# Renombrar las variables de la base ea_antigua para hacer el join
+names(ea_antigua)[names(ea_antigua) == "intensidad_evento"]<-"intensidad_ea"
+names(ea_antigua)[names(ea_antigua) == "causalidad"]<-"causalidad_ea"
+names(ea_antigua)[names(ea_antigua) == "desenlace_del_evento_adver"]<-"desenlace_ea"
+
+# Hacer join
+
+ea_antigua_<-merge(ea_antigua,ea_vacunados_antiguo[,c("codigo_participante","intensidad_ea","causalidad_ea",
+                                                      "desenlace_ea","formato")],
+                   all.x = T,by=c("codigo_participante","intensidad_ea","causalidad_ea",
+                                                      "desenlace_ea"))
+sum(!is.na(ea_antigua_$formato))
+
+ea_antigua_max<-ea_antigua_ %>%
+  filter(!is.na(formato)) %>%
+  group_by(codigo_participante)%>%
+  summarise(ea_primero=max(ea_primero,na.rm = T))%>%
+  mutate(sel=rep(1))
+
+# Filtrar los que coinciden
+
+ea_antigua_ <- ea_antigua_[!is.na(ea_antigua_$formato),]
+
+ea_antigua_ <- merge(ea_antigua_,ea_antigua_max,all.x = T,
+                     by=c("codigo_participante","ea_primero"))
+
+ea_antigua_$sel[is.na(ea_antigua_$sel)]<-0
+
+# Seleccionar los 1
+
+ea_antigua_ <- ea_antigua_[ea_antigua_$sel == 1,]
+
+# Como hay repetidos, filtrar el que aparezca primero con el record_id
+
+ea_antigua_ <- ea_antigua_ %>%
+  group_by(codigo_participante) %>%
+  arrange(codigo_participante, record_id) %>%
+  mutate(sel_primero = ifelse(row_number() == 1, 1, 0))
+
+sum(ea_antigua_$sel_primero)
+
+# Filtrar los que aparecen de primeras según el record_id
+
+ea_antigua_ <- ea_antigua_[ea_antigua_$sel_primero == 1,]
+
+# Seleccionar las variables de interés
+
+ea_antigua_seleccion<-ea_antigua_[,c("codigo_participante","locales","local_events___1",
+                                     "local_events___2","local_events___3","local_events___4",
+                                     "local_events___5","local_events___6","otro_local",
+                                     "sistemicos","systemic_events___1","systemic_events___2",
+                                     "systemic_events___3","systemic_events___4","systemic_events___5",
+                                     "systemic_events___6","systemic_events___7","systemic_events___8",
+                                     "systemic_events___9","systemic_events___10",
+                                     "systemic_events___11",
+                                     "systemic_events___12","otro_sistemico",
+                                     "adenopatialugar___1",
+                                     "adenopatialugar___2",
+                                     "adenopatialugar___3",
+                                     "adenopatialugar___4","adenootra",
+                                     "exantema___1",
+                                     "exantema___2",
+                                     "exantema___3",
+                                     "exantema___4","otro_exantema",
+                                     "conducta_ea","el_evento_est_relacionado_2")]
+
+# Codificar valores de los eventos locales
+
+ea_antigua_seleccion$local_events___2[ea_antigua_seleccion$local_events___2 == 1]<-2
+ea_antigua_seleccion$local_events___3[ea_antigua_seleccion$local_events___3 == 1]<-3
+ea_antigua_seleccion$local_events___4[ea_antigua_seleccion$local_events___4 == 1]<-4
+ea_antigua_seleccion$local_events___5[ea_antigua_seleccion$local_events___5 == 1]<-5
+ea_antigua_seleccion$local_events___6[ea_antigua_seleccion$local_events___6 == 1]<-6
+
+ea_antigua_seleccion$local_events<-apply(ea_antigua_seleccion[,c(paste0("local_events___",c(1:5)))], 1, max)
+
+ea_antigua_seleccion$local_events[ea_antigua_seleccion$locales == 1 & ea_antigua_seleccion$local_events == 0]<-6
+
+
+# Codificar valores de los eventos sistémicos
+
+ea_antigua_seleccion$systemic_events___2[ea_antigua_seleccion$systemic_events___2 == 1]<-2
+ea_antigua_seleccion$systemic_events___3[ea_antigua_seleccion$systemic_events___3 == 1]<-3
+ea_antigua_seleccion$systemic_events___4[ea_antigua_seleccion$systemic_events___4 == 1]<-4
+ea_antigua_seleccion$systemic_events___5[ea_antigua_seleccion$systemic_events___5 == 1]<-5
+ea_antigua_seleccion$systemic_events___6[ea_antigua_seleccion$systemic_events___6 == 1]<-6
+ea_antigua_seleccion$systemic_events___7[ea_antigua_seleccion$systemic_events___7 == 1]<-7
+ea_antigua_seleccion$systemic_events___8[ea_antigua_seleccion$systemic_events___8 == 1]<-8
+ea_antigua_seleccion$systemic_events___9[ea_antigua_seleccion$systemic_events___9 == 1]<-9
+ea_antigua_seleccion$systemic_events___10[ea_antigua_seleccion$systemic_events___10 == 1]<-10
+ea_antigua_seleccion$systemic_events___11[ea_antigua_seleccion$systemic_events___11 == 1]<-11
+ea_antigua_seleccion$systemic_events___12[ea_antigua_seleccion$systemic_events___12 == 1]<-12
+
+ea_antigua_seleccion$systemic_events<-apply(ea_antigua_seleccion[,c(paste0("systemic_events___",c(1:11)))], 1, max)
+
+ea_antigua_seleccion$systemic_events[ea_antigua_seleccion$sistemicos == 1 & ea_antigua_seleccion$systemic_events == 0]<-12
+
+
+# Codificar valores de las adenopatias
+
+ea_antigua_seleccion$adenopatialugar___2[ea_antigua_seleccion$adenopatialugar___2 == 1]<-2
+ea_antigua_seleccion$adenopatialugar___3[ea_antigua_seleccion$adenopatialugar___3 == 1]<-3
+ea_antigua_seleccion$adenopatialugar___4[ea_antigua_seleccion$adenopatialugar___4 == 1]<-4
+
+ea_antigua_seleccion$adenopatialugar<-apply(ea_antigua_seleccion[,c(paste0("adenopatialugar___",c(1:3)))], 1, max)
+
+ea_antigua_seleccion$adenopatialugar[ea_antigua_seleccion$adenopatialugar == 0 & ea_antigua_seleccion$adenootra != ""]<-4
+
+
+# Codificar valores de las exantemas
+
+ea_antigua_seleccion$exantema___2[ea_antigua_seleccion$exantema___2 == 1]<-2
+ea_antigua_seleccion$exantema___3[ea_antigua_seleccion$exantema___3 == 1]<-3
+ea_antigua_seleccion$exantema___4[ea_antigua_seleccion$exantema___4 == 1]<-4
+
+ea_antigua_seleccion$exantema<-apply(ea_antigua_seleccion[,c(paste0("exantema___",c(1:3)))], 1, max)
+
+ea_antigua_seleccion$exantema[ea_antigua_seleccion$exantema == 0 & !is.na(ea_antigua_seleccion$otro_exantema)]<-4
+
+
+# Cambiar el nombre de la variable "el_evento_est_relacionado_2"
+
+names(ea_antigua_seleccion)[names(ea_antigua_seleccion) == "el_evento_est_relacionado_2"]<-"ea_invest"
+names(ea_antigua_seleccion)[names(ea_antigua_seleccion) == "adenootra"]<-"otro_adeno"
+
+
+# Seleccionar las variables de interés
+
+ea_antigua_seleccion<-ea_antigua_seleccion[,c("codigo_participante",
+                                              "locales","local_events","otro_local",
+                                     "sistemicos","systemic_events","otro_sistemico",
+                                     "adenopatialugar","otro_adeno",
+                                     "exantema","otro_exantema",
+                                     "conducta_ea","ea_invest")]
+
+
+
+# Adjuntar estas variables a la base de los vacunados con EA en el antiguo formato
+
+ea_vacunados_antiguo<-merge(ea_vacunados_antiguo,ea_antigua_seleccion,all.x=T,
+                            by=c("codigo_participante"))
+
+```
+
+
+```{r,include=FALSE}
+# Filtrar los quue tienen su EA en el nuevo formato
+
+ea_vacunados_nuevo<-ea_vacunados[ea_vacunados$formato == "EA nuevo",]
+
+# Renombrar las variables de la base ea_antigua para hacer el join
+names(ea_nueva)[names(ea_nueva) == "intensidad_evento"]<-"intensidad_ea"
+names(ea_nueva)[names(ea_nueva) == "causalidad_evento"]<-"causalidad_ea"
+names(ea_nueva)[names(ea_nueva) == "desenlace_evento"]<-"desenlace_ea"
+
+# Filtrar los EA no serios
+
+#ea_nueva<-ea_nueva[ea_nueva$tipo_evento == 2,]
+
+
+# Hacer join
+
+ea_nueva_<-merge(ea_nueva,ea_vacunados_nuevo[,c("codigo_participante","intensidad_ea","causalidad_ea",
+                                                      "desenlace_ea","formato")],
+                   all.x = T,by=c("codigo_participante","intensidad_ea","causalidad_ea",
+                                                      "desenlace_ea"))
+sum(!is.na(ea_nueva_$formato))
+
+ea_nueva_max<-ea_nueva_ %>%
+  filter(!is.na(formato)) %>%
+  group_by(codigo_participante)%>%
+  summarise(ea_primero=max(ea_primero,na.rm = T))%>%
+  mutate(sel=rep(1))
+
+# Filtrar los que coinciden
+
+ea_nueva_ <- ea_nueva_[!is.na(ea_nueva_$formato),]
+
+ea_nueva_ <- merge(ea_nueva_,ea_nueva_max,all.x = T,
+                     by=c("codigo_participante","ea_primero"))
+
+ea_nueva_$sel[is.na(ea_nueva_$sel)]<-0
+
+# Seleccionar los 1
+
+ea_nueva_ <- ea_nueva_[ea_nueva_$sel == 1,]
+
+# Como hay repetidos, filtrar el que aparezca primero con el record_id
+
+ea_nueva_ <- ea_nueva_ %>%
+  group_by(codigo_participante) %>%
+  arrange(codigo_participante, record_id) %>%
+  mutate(sel_primero = ifelse(row_number() == 1, 1, 0))
+
+sum(ea_nueva_$sel_primero)
+
+# Filtrar los que aparecen de primeras según el record_id
+
+ea_nueva_ <- ea_nueva_[ea_nueva_$sel_primero == 1,]
+
+
+# Seleccionar las variables de interés
+
+ea_nueva_seleccion<-ea_nueva_[,c("codigo_participante","locales","local_events","otro_local",
+                                     "sistemicos","systemic_events","otro_sistemico",
+                                 "exantema_especifi___1",
+                                 "exantema_especifi___2",
+                                 "exantema_especifi___3",
+                                 "exantema_especifi___4","exantema_otro",
+                                     "conducta_ea","evento_relacionado_in")]
+
+
+# Codificar valores de las exantemas
+
+ea_nueva_seleccion$exantema_especifi___2[ea_nueva_seleccion$exantema_especifi___2 == 1]<-2
+ea_nueva_seleccion$exantema_especifi___3[ea_nueva_seleccion$exantema_especifi___3 == 1]<-3
+ea_nueva_seleccion$exantema_especifi___4[ea_nueva_seleccion$exantema_especifi___4 == 1]<-4
+
+ea_nueva_seleccion$exantema<-apply(ea_nueva_seleccion[,c(paste0("exantema_especifi___",c(1:3)))], 1, max)
+
+ea_nueva_seleccion$exantema[ea_nueva_seleccion$exantema == 0 & ea_nueva_seleccion$exantema_otro != ""]<-4
+
+# Cambiar el nombre de la variable "evento_relacionado_in"
+
+names(ea_nueva_seleccion)[names(ea_nueva_seleccion) == "evento_relacionado_in"]<-"ea_invest"
+names(ea_nueva_seleccion)[names(ea_nueva_seleccion) == "exantema_otro"]<-"otro_exantema"
+
+
+# Selecciónar variables
+
+ea_nueva_seleccion<-ea_nueva_seleccion[,c("codigo_participante",
+                                     "locales","local_events","otro_local",
+                                     "sistemicos","systemic_events","otro_sistemico",
+                                 "exantema","otro_exantema",
+                                     "conducta_ea","ea_invest")]
+
+# Adjuntar estas variables a la base de los vacunados con EA en el antiguo formato
+
+ea_vacunados_nuevo<-merge(ea_vacunados_nuevo,ea_nueva_seleccion,all.x=T,
+                            by=c("codigo_participante"))
+
+
+# Quitar registro que no aporta información de eventos adversos (HUSI-122)
+
+ea_vacunados_nuevo<-ea_vacunados_nuevo[!is.na(ea_vacunados_nuevo$intensidad_ea),]
+
+
+# Poner ceros en los NA's
+
+for (i in 1:ncol(ea_vacunados_nuevo)) {
+  ea_vacunados_nuevo[is.na(ea_vacunados_nuevo[,i]),i]<-0
+}
+
+```
+
+```{r,include=FALSE}
+ea_vacunados<-bind_rows(ea_vacunados_antiguo,
+                        ea_vacunados_nuevo)
+```
+
+```{r,include=FALSE}
+#Codificar los EA requeridos
+
+ea_vacunados$locales[ea_vacunados$codigo_participante == "COL-HUSI-241"]<-0
+ea_vacunados$local_events[ea_vacunados$codigo_participante == "COL-HUSI-241"]<-0
+ea_vacunados$otro_local[ea_vacunados$codigo_participante == "COL-HUSI-241"]<-""
+
+ea_vacunados$sistemicos[ea_vacunados$codigo_participante == "COL-HUSI-241"]<-1
+ea_vacunados$systemic_events[ea_vacunados$codigo_participante == "COL-HUSI-241"]<-11
+```
+
+
+
+```{r,include=FALSE}
+ea_vacunados$cantidad_ea<-ifelse(ea_vacunados$locales == 1 & ea_vacunados$sistemicos == 1,2,1)
+
+
+# ---  
+
+ea_vacunados$intensidad_cat<-ifelse(ea_vacunados$intensidad_ea ==1,"Leve",
+                                    ifelse(ea_vacunados$intensidad_ea == 2, "Moderado",
+                                           ifelse(ea_vacunados$intensidad_ea == 3,"Severo","Peligroso para la vida")))
+
+ea_vacunados$intensidad_cat<-factor(ea_vacunados$intensidad_cat,levels = c("Leve","Moderado",
+                                                                           "Severo"))
+
+ea_vacunados$intensidad_cat2<-ifelse(ea_vacunados$intensidad_ea >=3,"Mayor o igual a 3","Menor a 3")
+
+ea_vacunados$intensidad_cat2<-factor(ea_vacunados$intensidad_cat2,levels = c("Menor a 3",
+                                                                             "Mayor o igual a 3"))
+
+# ---  
+
+ea_vacunados$causalidad_cat<-ifelse(ea_vacunados$causalidad_ea == 5,"Relacionado","No relacionado")
+
+ea_vacunados$causalidad_cat<-factor(ea_vacunados$causalidad_cat,levels = c("Relacionado","No relacionado"))
+
+# ---
+
+ea_vacunados$desenlace_cat<-ifelse(ea_vacunados$desenlace_ea %in% c(1,2),"Recuperado",
+                                                 ifelse(ea_vacunados$desenlace_ea == 0,"Sin informacion",
+                                                        "No recuperado"))
+
+ea_vacunados$desenlace_cat<-factor(ea_vacunados$desenlace_cat,levels = c("Recuperado",
+                                                                         "No recuperado",
+                                                                         "Sin informacion"))
+
+# ---
+
+ea_vacunados$local_events_cat<-NA
+
+ea_vacunados$local_events_cat[ea_vacunados$local_events == 1]<-"Dolor en el sitio de la inyección"
+ea_vacunados$local_events_cat[ea_vacunados$local_events == 2]<-"Enrojecimiento en el sitio de inyección"
+ea_vacunados$local_events_cat[ea_vacunados$local_events == 3]<-"Edema del sitio de inyección"
+ea_vacunados$local_events_cat[ea_vacunados$local_events == 4]<-"Induración del sitio de inyección"
+ea_vacunados$local_events_cat[ea_vacunados$local_events == 5]<-"Prurito"
+ea_vacunados$local_events_cat[ea_vacunados$local_events == 6]<-"Otro"
+
+#ea_vacunados$local_events_cat<-factor(ea_vacunados$local_events_cat,levels = c("Dolor en el sitio de la inyección",
+#                                                  "Enrojecimiento en el sitio de inyección",
+#                                                  "Edema del sitio de inyección",
+#                                                  "Induración del sitio de inyección",
+#                                                  "Prurito",
+#                                                  "Otro"))
+
+# ---
+
+ea_vacunados$systemic_events_cat<-NA
+
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 1]<-"Dolor muscular"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 2]<-"Dolor de cabeza"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 3]<-"Fatiga"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 4]<-"Náuseas/vómito"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 5]<-"Escalofríos"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 6]<-"Fiebre"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 7]<-"Linfadenopatías axilares"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 8]<-"Anafilaxia"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 9]<-"Choque"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 10]<-"Convulsiones"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 11]<-"Exantema"
+ea_vacunados$systemic_events_cat[ea_vacunados$systemic_events == 12]<-"Otro"
+
+#ea_vacunados$systemic_events_cat<-factor(ea_vacunados$systemic_events_cat,
+#                                         levels = c("Dolor muscular",
+#                                                    "Dolor de cabeza",
+#                                                    "Fatiga",
+#                                                    "Náuseas/vómito",
+#                                                    "Escalofríos",
+#                                                    "Fiebre",
+#                                                    "Linfadenopatías axilares",
+#                                                    "Convulsiones",
+#                                                    "Exantema",
+#                                                    "Otro"))
+
+```
+
+
+```{r,include=FALSE}
+# Adjuntar conteos de CD4
+conteo_cd4 <- read_excel("20250520_Conteo_CD4.xlsx")
+
+conteo_cd4<-conteo_cd4%>%
+  mutate(codigo_participante = gsub("\\s+", "", codigo_participante))%>%
+  mutate(codigo_participante=str_trim(codigo_participante))
+
+# Contar cantidad de pacientes:
+
+length(unique(conteo_cd4$codigo_participante))
+
+
+# A la base de vacunados
+
+datos_vacunados<-merge(datos_vacunados,
+                       conteo_cd4,all.x = T,by=c("codigo_participante"))
+
+#nvac<-datos_vacunados%>%group_by(codigo_participante)%>%summarise(n())
+summary(datos_vacunados$cd4)
+
+datos_vacunados$categorias_cd4<-NA
+
+datos_vacunados$categorias_cd4[datos_vacunados$cd4 >= 200 & datos_vacunados$cd4 <= 349]<-"VIH 200-349"
+datos_vacunados$categorias_cd4[datos_vacunados$cd4 >= 350 & datos_vacunados$cd4 <= 499]<-"VIH 350-499"
+datos_vacunados$categorias_cd4[datos_vacunados$cd4 >= 500 & datos_vacunados$cd4 <= 749]<-"VIH 500-749"
+datos_vacunados$categorias_cd4[datos_vacunados$cd4 >= 750 & datos_vacunados$cd4 <= 999]<-"VIH 750-999"
+datos_vacunados$categorias_cd4[datos_vacunados$cd4 >= 1000]<-"VIH mayor 1000"
+
+
+datos_vacunados$confirmacion_entidad<-as.character(datos_vacunados$confirmacion_entidad)
+
+datos_vacunados$categorias_cd4[is.na(datos_vacunados$categorias_cd4)]<-datos_vacunados$confirmacion_entidad[is.na(datos_vacunados$categorias_cd4)]
+
+#View(datos_vacunados[,c("codigo_participante","confirmacion_entidad","categorias_cd4")])
+
+datos_vacunados$categorias_cd4[datos_vacunados$confirmacion_entidad == "Prep" & datos_vacunados$categorias_cd4 %in% c("VIH 200-349","VIH 350-499","VIH 500-749","VIH 750-999","VIH mayor 1000")]<-"Prep"
+
+
+
+# Adjuntar
+
+ea_vacunados<-merge(ea_vacunados,conteo_cd4,all.x = T,by=c("codigo_participante"))
+
+ea_vacunados$categorias_cd4<-NA
+
+ea_vacunados$categorias_cd4[ea_vacunados$cd4 >= 200 & ea_vacunados$cd4 <= 349]<-"VIH 200-349"
+ea_vacunados$categorias_cd4[ea_vacunados$cd4 >= 350 & ea_vacunados$cd4 <= 499]<-"VIH 350-499"
+ea_vacunados$categorias_cd4[ea_vacunados$cd4 >= 500 & ea_vacunados$cd4 <= 749]<-"VIH 500-749"
+ea_vacunados$categorias_cd4[ea_vacunados$cd4 >= 750 & ea_vacunados$cd4 <= 999]<-"VIH 750-999"
+ea_vacunados$categorias_cd4[ea_vacunados$cd4 >= 1000]<-"VIH mayor 1000"
+
+
+ea_vacunados$confirmacion_entidad<-as.character(ea_vacunados$confirmacion_entidad)
+
+ea_vacunados$categorias_cd4[is.na(ea_vacunados$categorias_cd4)]<-ea_vacunados$confirmacion_entidad[is.na(ea_vacunados$categorias_cd4)]
+
+```
+
+```{r,include=FALSE}
+levels(as.factor(datos_vacunados$categorias_cd4))
+
+datos_vacunados$categorias_cd4<-factor(datos_vacunados$categorias_cd4,
+                                       levels = c("VIH 200-349",
+                                                  "VIH 350-499",
+                                                  "VIH 500-749",
+                                                  "VIH 750-999",
+                                                  "VIH mayor 1000",
+                                                  "Prep","Factor de riesgo"))
+#datos_vacunados[datos_vacunados$categorias_cd4 == "VIH",c("codigo_participante","categorias_cd4")]levels(as.factor(datos_vacunados$categorias_cd4))
+#datos_vacunados[datos_vacunados$codigo_participante %in% c("COL-CUC-293",
+#                                                          "COL-HUSI-241",
+#                                                          "COL-ICL-491"),
+#c("codigo_participante","tipo_identificacion","numero_documento")]
+
+levels(as.factor(datos_vacunados$confirmacion_entidad))
+
+datos_vacunados$confirmacion_entidad<-factor(datos_vacunados$confirmacion_entidad,
+                                       levels = c("VIH",
+                                                  "Prep","Factor de riesgo"))
+
+```
+
+
+```{r,include=FALSE}
+levels(as.factor(ea_vacunados$categorias_cd4))
+
+ea_vacunados$categorias_cd4<-factor(ea_vacunados$categorias_cd4,
+                                       levels = c("VIH 200-349",
+                                                  "VIH 350-499",
+                                                  "VIH 500-749",
+                                                  "VIH 750-999",
+                                                  "VIH mayor 1000",
+                                                  "Prep","Factor de riesgo"))
+
+levels(as.factor(ea_vacunados$confirmacion_entidad))
+
+ea_vacunados$confirmacion_entidad<-factor(ea_vacunados$confirmacion_entidad,
+                                       levels = c("VIH",
+                                                  "Prep","Factor de riesgo"))
+
+```
+
+```{r,include=FALSE}
+#write.xlsx(ea_vacunados[ea_vacunados$locales == 1 & ea_vacunados$sistemicos == 1,],
+#           "20250528_EAlocales_sist.xlsx")
+
+otro_locales<-ea_vacunados[ea_vacunados$local_events_cat == "Otro" & !is.na(ea_vacunados$local_events_cat),c("codigo_participante","formato")]
+
+otro_loc_ant<-merge(otro_locales[otro_locales$formato == "EA antiguo",],
+                    ea_antigua[,c("codigo_participante","otro_local")],
+                    all.x = T,by=c("codigo_participante"))
+
+otro_loc_ant<-otro_loc_ant[otro_loc_ant$otro_local != "",]
+
+
+otro_loc_nuev<-merge(otro_locales[otro_locales$formato == "EA nuevo",],
+                    ea_nueva[,c("codigo_participante","otro_local")],
+                    all.x = T,by=c("codigo_participante"))
+
+otro_loc_nuev<-otro_loc_nuev[otro_loc_nuev$otro_local != "",]
+
+
+#write.xlsx(rbind(otro_loc_ant,otro_loc_nuev),"20250528_CategoriasOtros_Locales.xlsx")
+
+
+otro_sistemicos<-ea_vacunados[ea_vacunados$systemic_events_cat == "Otro" & !is.na(ea_vacunados$systemic_events_cat),c("codigo_participante","formato")]
+
+otro_sis_ant<-merge(otro_sistemicos[otro_sistemicos$formato == "EA antiguo",],
+                    ea_antigua[,c("codigo_participante","otro_sistemico")],
+                    all.x = T,by=c("codigo_participante"))
+
+otro_sis_ant<-otro_sis_ant[otro_sis_ant$otro_sistemico != "",]
+
+
+otro_sis_nuev<-merge(otro_sistemicos[otro_sistemicos$formato == "EA nuevo",],
+                    ea_nueva[,c("codigo_participante","otro_sistemico")],
+                    all.x = T,by=c("codigo_participante"))
+
+otro_sis_nuev<-otro_sis_nuev[otro_sis_nuev$otro_sistemico != "",]
+
+#write.xlsx(rbind(otro_sis_ant,otro_sis_nuev),"20250528_CategoriasOtros_Sistemicos.xlsx")
+
+```
+
+
+
+# Distribución de los pacientes vacunados según VIH + o VIH -
+
+```{r,include=FALSE}
+# Omitir los registros de los pacientes que tuvieron falla por selección:
+
+datos_vacunados <- datos_vacunados %>%
+  filter(!(codigo_participante %in% c("COL-CUC-243",
+                                      "COL-ICL-339",
+                                      "COL-ICL-545",
+                                      "COL-CUC-641")))
+
+ea_vacunados <- ea_vacunados %>%
+  filter(!(codigo_participante %in% c("COL-CUC-243",
+                                      "COL-ICL-339",
+                                      "COL-ICL-545",
+                                      "COL-CUC-641")))
+```
+
+
+```{r,include=FALSE}
+# Crear categoría de grupo de vacunación
+
+levels(as.factor(datos_vacunados$asignacion))
+table(datos_vacunados$asignacion)
+
+sum(is.na(datos_vacunados$asignacion))
+class(datos_vacunados$asignacion)
+
+datos_vacunados$grupo_vac <- NA
+
+datos_vacunados$grupo_vac[datos_vacunados$asignacion == 1] <- "Tardio"
+datos_vacunados$grupo_vac[datos_vacunados$asignacion == 2] <- "Temprano"
+
+datos_vacunados$grupo_vac[is.na(datos_vacunados$asignacion)] <- "Cohorte"
+
+
+```
+
+
+```{r}
+# Totalidad de pacientes vacunados según la entidad
+table(datos_vacunados$grupo_vac)
+```
+
+```{r,include=FALSE}
+# Totalidad de pacientes con EA según la entidad
+table(ea_vacunados$confirmacion_entidad)
+```
+
+```{r}
+# Filtrar y separar las bases
+
+# El ECA
+datos_vacunados_eca <- datos_vacunados %>%
+  filter(grupo_vac %in% c("Tardio","Temprano")) %>%
+  as.data.frame()
+
+# La Cohorte
+datos_vacunados_cohorte <- datos_vacunados %>%
+  filter(grupo_vac %in% c("Cohorte")) %>%
+  as.data.frame()
+
+```
+
+
+```{r}
+#Exportar base
+
+write.xlsx(datos_vacunados,"20260729_1_Pacientes vacunados.xlsx")
+```
+
+
+# Incidencia acumulada de EA según la entidad y el grupo de vacunación
+
+```{r}
+# El ECA
+datos_vacunados_eca$presentar_ea[datos_vacunados_eca$codigo_participante == "COL-HUSI-122"]<-0
+
+table(datos_vacunados_eca$presentar_ea,
+      datos_vacunados_eca$grupo_vac)
+
+round(prop.table(table(datos_vacunados_eca$presentar_ea,
+      datos_vacunados_eca$grupo_vac),margin = 2),4)*100
+
+prop.test(x = c(length(datos_vacunados_eca$grupo_vac[datos_vacunados_eca$presentar_ea == 1 & 
+                                                       datos_vacunados_eca$grupo_vac == "Temprano"]),
+                length(datos_vacunados_eca$grupo_vac[datos_vacunados_eca$presentar_ea == 1 & 
+                                                       datos_vacunados_eca$grupo_vac == "Tardio"])
+                ), 
+          n = c(length(datos_vacunados_eca$grupo_vac[datos_vacunados_eca$grupo_vac == "Temprano"]),
+                length(datos_vacunados_eca$grupo_vac[datos_vacunados_eca$grupo_vac == "Tardio"])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+#round(chisq.test(as.matrix(table(datos_vacunados$presentar_ea,
+#                                 datos_vacunados$grupo_vih)))$p.value,3)
+```
+
+```{r}
+#La Cohorte
+datos_vacunados_cohorte$presentar_ea[datos_vacunados_cohorte$codigo_participante == "COL-HUSI-122"]<-0
+
+table(datos_vacunados_cohorte$presentar_ea,
+      datos_vacunados_cohorte$grupo_vac)
+
+round(prop.table(table(datos_vacunados_cohorte$presentar_ea,
+      datos_vacunados_cohorte$grupo_vac),margin = 2),4)*100
+
+```
+
+
+# Cantidad de EA
+
+```{r,include=FALSE}
+
+# Aduntar la categoría de grupo de vacunación para la base de EA
+
+ea_vacunados <- ea_vacunados %>%
+  left_join(datos_vacunados[,c("codigo_participante",
+                               "grupo_vac")],
+            by = c("codigo_participante"))
+
+```
+
+
+```{r}
+table(ea_vacunados$cantidad_ea[ea_vacunados$grupo_vac %in% c("Temprano",
+                                                             "Tardio")],
+      ea_vacunados$grupo_vac[ea_vacunados$grupo_vac %in% c("Temprano",
+                                                             "Tardio")])
+
+round(prop.table(table(ea_vacunados$cantidad_ea[ea_vacunados$grupo_vac %in% c("Temprano",
+                                                             "Tardio")],
+      ea_vacunados$grupo_vac[ea_vacunados$grupo_vac %in% c("Temprano",
+                                                             "Tardio")]),margin = 2),4)*100
+
+
+# -------------------- 1 EA
+
+prop.test(x = c(length(ea_vacunados$grupo_vac[ea_vacunados$cantidad_ea == 1 & 
+                                                       ea_vacunados$grupo_vac == "Temprano"]),
+                length(ea_vacunados$grupo_vac[ea_vacunados$cantidad_ea == 1 & 
+                                                       ea_vacunados$grupo_vac == "Tardio"])
+                ), 
+          n = c(length(ea_vacunados$grupo_vac[ea_vacunados$grupo_vac %in% c("Temprano")]),
+                length(ea_vacunados$grupo_vac[ea_vacunados$grupo_vac %in% c("Tardio")])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- 2 EA's
+
+prop.test(x = c(length(ea_vacunados$grupo_vac[ea_vacunados$cantidad_ea == 2 & 
+                                                       ea_vacunados$grupo_vac == "Temprano"]),
+                length(ea_vacunados$grupo_vac[ea_vacunados$cantidad_ea == 2 & 
+                                                       ea_vacunados$grupo_vac == "Tardio"])
+                ), 
+          n = c(length(ea_vacunados$grupo_vac[ea_vacunados$grupo_vac %in% c("Temprano")]),
+                length(ea_vacunados$grupo_vac[ea_vacunados$grupo_vac %in% c("Tardio")])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+```
+
+```{r}
+# La Cohorte
+
+table(ea_vacunados$cantidad_ea[ea_vacunados$grupo_vac %in% c("Cohorte")],
+      ea_vacunados$grupo_vac[ea_vacunados$grupo_vac %in% c("Cohorte")])
+
+round(prop.table(table(ea_vacunados$cantidad_ea[ea_vacunados$grupo_vac %in% c("Cohorte")],
+      ea_vacunados$grupo_vac[ea_vacunados$grupo_vac %in% c("Cohorte")]),margin = 2),4)*100
+
+
+```
+
+```{r,include=FALSE}
+ea_vacunados$otro_local[ea_vacunados$local_events != 6]<-""
+ea_vacunados$otro_sistemico[ea_vacunados$systemic_events != 12]<-""
+
+```
+
+```{r,include=FALSE}
+ea_vacunados_locales<-ea_vacunados %>%
+  filter(locales == 1)%>%
+  select(-sistemicos,
+         -systemic_events,
+  -otro_sistemico,
+  -adenopatialugar,
+  -otro_adeno,-exantema,-otro_exantema,
+  -systemic_events_cat)%>%
+  mutate(tipo=rep("local"))
+
+ea_vacunados_locales$otro_local<-str_trim(ea_vacunados_locales$otro_local)
+
+# Cargar Excel de la categoría de otros EA locales
+ea_locales<-read_xlsx("20250610_CategoriasOtros_Locales.xlsx")
+
+ea_locales$otro_local<-str_trim(ea_locales$otro_local)
+
+#Adjuntar info:
+
+ea_vacunados_locales<-merge(ea_vacunados_locales,ea_locales,all.x = T,
+                            by=c("codigo_participante","formato","otro_local"))
+
+#Asignar las categorías
+
+ea_vacunados_locales$local_events_cat[ea_vacunados_locales$local_events_cat == "Otro"]<-ea_vacunados_locales$otro_cat[ea_vacunados_locales$local_events_cat == "Otro"]
+
+
+```
+
+```{r,include=FALSE}
+ea_vacunados_sistemicos<-ea_vacunados %>%
+  filter(sistemicos == 1)%>%
+  select(-locales,
+         -local_events,
+  -otro_local,
+  -local_events_cat)%>%
+  mutate(tipo=rep("sistemicos"))
+
+ea_vacunados_sistemicos$otro_sistemico<-str_trim(ea_vacunados_sistemicos$otro_sistemico)
+
+# Cargar Excel de la categoría de otros EA sistemicos
+ea_sistemicos<-read_xlsx("20250610_CategoriasOtros_Sistemicos.xlsx")
+
+ea_sistemicos$otro_sistemico<-str_trim(ea_sistemicos$otro_sistemico)
+
+#Adjuntar info:
+
+ea_vacunados_sistemicos<-merge(ea_vacunados_sistemicos,ea_sistemicos,all.x = T,
+                            by=c("codigo_participante","formato","otro_sistemico"))
+
+#Asignar las categorías
+
+ea_vacunados_sistemicos$systemic_events_cat[ea_vacunados_sistemicos$systemic_events_cat == "Otro"]<-ea_vacunados_sistemicos$otro_cat[ea_vacunados_sistemicos$systemic_events_cat == "Otro"]
+
+```
+
+```{r,include=FALSE}
+ea_vacunados_<-bind_rows(ea_vacunados_locales,
+                         ea_vacunados_sistemicos)
+
+ea_vacunados_ <- ea_vacunados_ %>%
+  relocate(locales,.after = tipo)%>%
+  relocate(local_events,.after = locales)%>%
+  relocate(local_events_cat,.after = local_events)%>%
+  relocate(otro_local,.after = local_events_cat)%>%
+  relocate(systemic_events_cat,.after = systemic_events)%>%
+  relocate(otro_sistemico,.after = systemic_events_cat)
+
+#write.xlsx(ea_vacunados,"20250616_pacientes con ea.xlsx")
+#write.xlsx(ea_vacunados_,"20251219_EA no serios.xlsx")
+```
+
+
+```{r}
+# Filtrar y separar las bases
+
+# El ECA
+ea_vacunados_eca <- ea_vacunados_ %>%
+  filter(grupo_vac %in% c("Tardio","Temprano")) %>%
+  as.data.frame()
+
+# La Cohorte
+ea_vacunados_cohorte <- ea_vacunados_ %>%
+  filter(grupo_vac %in% c("Cohorte")) %>%
+  as.data.frame()
+
+```
+
+
+```{r}
+#Exportar base
+
+write.xlsx(ea_vacunados_,"20260729_2_EA de pacientes vacunados.xlsx")
+```
+
+
+
+
+# Severidad de EA según la entidad y la categoría de grupo vacunación
+
+## Primera categoría de la intensidad del EA
+
+```{r}
+#El ECA
+table(ea_vacunados_eca$intensidad_ea,
+      ea_vacunados_eca$grupo_vac)
+
+round(prop.table(table(ea_vacunados_eca$intensidad_ea,
+      ea_vacunados_eca$grupo_vac),margin = 2),4)*100
+
+
+# -------------------- Grado 1
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$intensidad_ea == 1 & 
+                                                       ea_vacunados_eca$grupo_vac == "Temprano"]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$intensidad_ea == 1 & 
+                                                       ea_vacunados_eca$grupo_vac == "Tardio"])
+                ), 
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano")]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio")])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+
+# -------------------- Grado 2
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$intensidad_ea == 2 & 
+                                                       ea_vacunados_eca$grupo_vac == "Temprano"]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$intensidad_ea == 2 & 
+                                                       ea_vacunados_eca$grupo_vac == "Tardio"])
+                ), 
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano")]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio")])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- Grado 3
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$intensidad_ea == 3 & 
+                                                       ea_vacunados_eca$grupo_vac == "Temprano"]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$intensidad_ea == 3 & 
+                                                       ea_vacunados_eca$grupo_vac == "Tardio"])
+                ), 
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano")]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio")])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+```
+
+```{r}
+#La Cohorte
+table(ea_vacunados_cohorte$intensidad_ea,
+      ea_vacunados_cohorte$grupo_vac)
+
+round(prop.table(table(ea_vacunados_cohorte$intensidad_ea,
+      ea_vacunados_cohorte$grupo_vac),margin = 2),4)*100
+```
+
+
+
+
+# Causalidad de EA según la entidad y el grupo de vacunación
+
+
+```{r}
+#El ECA
+table(ea_vacunados_eca$causalidad_cat,
+      ea_vacunados_eca$grupo_vac)
+
+round(prop.table(table(ea_vacunados_eca$causalidad_cat,
+      ea_vacunados_eca$grupo_vac),margin = 2),4)*100
+
+
+# -------------------- Relacionado
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$causalidad_cat == "Relacionado" & 
+                                                       ea_vacunados_eca$grupo_vac == "Temprano"]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$causalidad_cat == "Relacionado" & 
+                                                       ea_vacunados_eca$grupo_vac == "Tardio"])
+                ), 
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano")]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio")])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- No relacionado
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$causalidad_cat == "No relacionado" & 
+                                                       ea_vacunados_eca$grupo_vac == "Temprano"]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$causalidad_cat == "No relacionado" & 
+                                                       ea_vacunados_eca$grupo_vac == "Tardio"])
+                ), 
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano")]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio")])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+
+```
+
+```{r}
+#La Cohorte
+table(ea_vacunados_cohorte$causalidad_cat,
+      ea_vacunados_cohorte$grupo_vac)
+
+round(prop.table(table(ea_vacunados_cohorte$causalidad_cat,
+      ea_vacunados_cohorte$grupo_vac),margin = 2),4)*100
+```
+
+
+# Desenlace de EA según la entidad y el grupo de vacunación
+
+```{r}
+#El ECA
+table(ea_vacunados_eca$desenlace_cat,
+      ea_vacunados_eca$grupo_vac)
+
+round(prop.table(table(ea_vacunados_eca$desenlace_cat,
+      ea_vacunados_eca$grupo_vac),margin = 2),4)*100
+
+
+# -------------------- Recuperado
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$desenlace_cat == "Recuperado" & 
+                                                       ea_vacunados_eca$grupo_vac == "Temprano"]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$desenlace_cat == "Recuperado" & 
+                                                       ea_vacunados_eca$grupo_vac == "Tardio"])
+                ), 
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano")]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio")])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- No recuperado
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$desenlace_cat == "No recuperado" & 
+                                                       ea_vacunados_eca$grupo_vac == "Temprano"]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$desenlace_cat == "No recuperado" & 
+                                                       ea_vacunados_eca$grupo_vac == "Tardio"])
+                ), 
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano")]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio")])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+```
+
+```{r}
+#La Cohorte
+table(ea_vacunados_cohorte$desenlace_cat,
+      ea_vacunados_cohorte$grupo_vac)
+
+round(prop.table(table(ea_vacunados_cohorte$desenlace_cat,
+      ea_vacunados_cohorte$grupo_vac),margin = 2),4)*100
+```
+
+
+# Tipos de eventos
+
+```{r}
+table(ea_vacunados_eca$tipo,
+      ea_vacunados_eca$grupo_vac)
+round(prop.table(table(ea_vacunados_eca$tipo,
+                       ea_vacunados_eca$grupo_vac),margin = 2),4)*100
+
+
+```
+
+
+## Tipos de eventos locales
+
+```{r,include=FALSE}
+#ECA
+
+levels(as.factor(ea_vacunados_eca$local_events_cat))
+
+
+ea_vacunados_eca$local_events_cat<-factor(ea_vacunados_eca$local_events_cat,
+                                       levels = c("Dolor en el sitio de la inyección",
+                                                  "Enrojecimiento en el sitio de inyección",
+                                                  "Edema del sitio de inyección",
+                                                  "Induración del sitio de inyección",
+                                                  "Prurito",
+                                                  "Take",
+                                                  "Otro"))
+
+
+table(ea_vacunados_eca$local_events_cat,
+      ea_vacunados_eca$grupo_vac)
+
+round(prop.table(table(ea_vacunados_eca$local_events_cat,
+      ea_vacunados_eca$grupo_vac),margin = 2),4)*100
+
+
+
+# -------------------- Dolor en el sitio de la inyección
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Dolor en el sitio de la inyección" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Dolor en el sitio de la inyección" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- Enrojecimiento en el sitio de inyección
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Enrojecimiento en el sitio de inyección" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Enrojecimiento en el sitio de inyección" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+
+# -------------------- Edema del sitio de inyección
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Edema del sitio de inyección" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Edema del sitio de inyección" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- Induración del sitio de inyección
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Induración del sitio de inyección" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Induración del sitio de inyección" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- Prurito
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Prurito" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Prurito" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+
+# -------------------- Otro
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Otro" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$local_events_cat == "Otro" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$locales == 1 & 
+                                                    !is.na(ea_vacunados_eca$locales)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$locales == 1 & !is.na(ea_vacunados_eca$locales)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+```
+
+```{r}
+table(ea_vacunados_cohorte$tipo,
+      ea_vacunados_cohorte$grupo_vac)
+round(prop.table(table(ea_vacunados_cohorte$tipo,
+                       ea_vacunados_cohorte$grupo_vac),margin = 2),4)*100
+
+
+```
+
+```{r}
+#La Cohorte
+table(ea_vacunados_cohorte$local_events_cat[ea_vacunados_cohorte$locales == 1 & 
+                                                    !is.na(ea_vacunados_cohorte$locales)],
+      ea_vacunados_cohorte$grupo_vac[ea_vacunados_cohorte$locales == 1 & 
+                                                    !is.na(ea_vacunados_cohorte$locales)])
+
+
+round(prop.table(table(ea_vacunados_cohorte$local_events_cat[ea_vacunados_cohorte$locales == 1 & 
+                                                    !is.na(ea_vacunados_cohorte$locales)],
+      ea_vacunados_cohorte$grupo_vac[ea_vacunados_cohorte$locales == 1 & 
+                                                    !is.na(ea_vacunados_cohorte$locales)]),margin = 2),4)*100
+```
+
+
+
+## Tipos de eventos sistémicos
+
+```{r,include=FALSE}
+#ECA
+
+levels(as.factor(ea_vacunados_eca$systemic_events_cat))
+
+ea_vacunados_eca$systemic_events_cat<-factor(ea_vacunados_eca$systemic_events_cat,
+                                         levels = c("Dolor muscular",
+                                           "Dolor de cabeza",
+                                                    
+                                                    "Fatiga",
+                                                    "Náuseas/vómito",
+                                                    "Escalofríos",
+                                                    "Fiebre",
+                                                    "Linfadenopatías axilares",
+                                                    "Convulsiones",
+                                                    "Exantema",
+                                                    "Cardiovasculares",
+                                                    "Dermatológicos",
+                                                    "Gastrointestinales",
+                                                    "Nariz y boca",
+                                                    "Osteomuscular",
+                                                    "Respiratorios",
+                                                    "Generales",
+                                                    "Otro"))
+
+
+
+
+table(ea_vacunados_eca$systemic_events_cat,
+      ea_vacunados_eca$grupo_vac)
+
+round(prop.table(table(ea_vacunados_eca$systemic_events_cat,
+      ea_vacunados_eca$grupo_vac),margin = 2),4)*100
+
+
+
+# -------------------- "Dolor muscular"
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Dolor muscular" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Dolor muscular" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- "Dolor de cabeza"
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Dolor de cabeza" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Dolor de cabeza" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- "Fatiga" --------- #
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Fatiga" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Fatiga" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- "Náuseas/vómito" --------- #
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Náuseas/vómito" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Náuseas/vómito" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- "Escalofríos" --------- #
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Escalofríos" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Escalofríos" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+
+# -------------------- "Fiebre" --------- #
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Fiebre" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Fiebre" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- "Linfadenopatías axilares" --------- #
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Linfadenopatías axilares" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Linfadenopatías axilares" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+
+# -------------------- "Convulsiones" --------- #
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Convulsiones" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Convulsiones" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+
+# -------------------- "Exantema" --------- #
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Exantema" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Exantema" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+
+# -------------------- "Dermatológicos" --------- #
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Dermatológicos" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Dermatológicos" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+
+# -------------------- "Respiratorios" --------- #
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Respiratorios" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Respiratorios" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+# -------------------- "Otro" --------- #
+
+prop.test(x = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Otro" & 
+                          ea_vacunados_eca$grupo_vac == "Temprano"  & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)]),
+                
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$systemic_events_cat == "Otro" & 
+                            ea_vacunados_eca$grupo_vac == "Tardio" & 
+                                                    ea_vacunados_eca$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          
+          n = c(length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Temprano") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)]),
+                length(ea_vacunados_eca$grupo_vac[ea_vacunados_eca$grupo_vac %in% c("Tardio") & ea_vacunados_eca$sistemicos == 1 & !is.na(ea_vacunados_eca$sistemicos)])
+                ), 
+          p = NULL,
+          alternative = c("two.sided"),
+          conf.level = 0.95, correct = TRUE)
+
+
+
+
+```
+
+
+
+```{r}
+
+ea_vacunados_cohorte$systemic_events_cat<-factor(ea_vacunados_cohorte$systemic_events_cat,
+                                         levels = c("Dolor muscular",
+                                           "Dolor de cabeza",
+                                                    
+                                                    "Fatiga",
+                                                    "Náuseas/vómito",
+                                                    "Escalofríos",
+                                                    "Fiebre",
+                                                    "Linfadenopatías axilares",
+                                                    "Convulsiones",
+                                                    "Exantema",
+                                                    "Cardiovasculares",
+                                                    "Dermatológicos",
+                                                    "Gastrointestinales",
+                                                    "Nariz y boca",
+                                                    "Osteomuscular",
+                                                    "Respiratorios",
+                                                    "Generales",
+                                                    "Otro"))
+
+
+#La Cohorte
+table(ea_vacunados_cohorte$systemic_events_cat[ea_vacunados_cohorte$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_cohorte$sistemicos)],
+      ea_vacunados_cohorte$grupo_vac[ea_vacunados_cohorte$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_cohorte$sistemicos)])
+
+
+round(prop.table(table(ea_vacunados_cohorte$systemic_events_cat[ea_vacunados_cohorte$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_cohorte$sistemicos)],
+      ea_vacunados_cohorte$grupo_vac[ea_vacunados_cohorte$sistemicos == 1 & 
+                                                    !is.na(ea_vacunados_cohorte$sistemicos)]),margin = 2),4)*100
+```
+
+
+
+
+
+
+
+**Linfadenopatias:**
+
+```{r,include=FALSE}
+linfadeno<-ea_vacunados_sistemicos[ea_vacunados_sistemicos$systemic_events_cat == "Linfadenopatías axilares",
+                                   c("grupo_vih","otro_sistemico",
+                                     "adenopatialugar","otro_adeno")]
+
+
+linfadeno$adenopatialugar[linfadeno$adenopatialugar == 1]<-"Cuello"
+linfadeno$adenopatialugar[linfadeno$adenopatialugar == 2]<-"Axilas"
+linfadeno$adenopatialugar[linfadeno$adenopatialugar == 3]<-"Ingles"
+linfadeno$adenopatialugar[linfadeno$adenopatialugar == 4]<-"Cervical izquierda"
+
+
+linfadeno$adenopatialugar[linfadeno$otro_sistemico == "Linfoadenopatia axilar brazo derecho"]<-"Brazo derecho"
+
+linfadeno$adenopatialugar[is.na(linfadeno$adenopatialugar)]<-"Desconocido"
+
+
+linfadeno$adenopatialugar<-factor(linfadeno$adenopatialugar,
+                                         levels = c("Cuello",
+                                                    "Axilas",
+                                                    "Brazo derecho",
+                                                    "Cervical izquierda","Desconocido"))
+
+
+```
+
+
+```{r}
+table(linfadeno$adenopatialugar,
+      linfadeno$grupo_vih)
+round(prop.table(table(linfadeno$adenopatialugar,
+      linfadeno$grupo_vih),margin = 2),4)*100
+
+round(chisq.test(as.matrix(table(linfadeno$adenopatialugar,
+      linfadeno$grupo_vih)))$p.value,3)
+```
+

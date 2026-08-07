@@ -1,0 +1,613 @@
+---
+title: "Tablas de los participantes del estudio de Mpox"
+author: "Proyecto Mpox"
+date: '`r Sys.Date()`'
+output:
+  word_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: united
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(dplyr)
+library(modeest)
+library(ggplot2)
+library(ggThemeAssist)
+library(tidyr)
+library(lubridate)
+library(openxlsx)
+library(readxl)
+library(boot)
+library(stringr)
+#devtools::install_github("kupietz/kableExtra")
+library(printr)
+library(rstatix)
+```
+
+```{r,include=FALSE}
+##### -------------- 0. Cargar base de los vacunados ------------
+
+vacuna<-read.csv("02. CRF Vacunacion/2CRFVacunacin_DATA_2025-04-23_1458.csv",header = T, encoding = "Latin1")
+
+# - Quitar espacios en blanco sobrantes de la variable codigo_participante de la base de los vacunados:
+
+vacuna <- vacuna %>%
+  mutate(codigo_participante = gsub("\\s+", "", codigo_participante))%>%
+  mutate(codigo_participante=str_trim(codigo_participante))
+
+```
+
+
+
+```{r, include=FALSE}
+##### -------------- 2. Editar tabla de cohorte ------------
+
+#Cargar el data frame:
+
+datos_cohorte<-read.csv("01. CRF Datos y criterios (nuevo estudio)/1CRFDatosYCriteriosN_DATA_2025-04-23_1457.csv",
+                    header = T, encoding = "Latin1")
+
+# Quitar los NA de los ID
+
+datos_cohorte<-datos_cohorte[!is.na(datos_cohorte$numero_documento),]
+
+```
+
+```{r,include=FALSE}
+#### -------------- 2.1. Editar de la tabla de la cohorte, el código del participante ------------
+
+# Crear la variable del codigo participante, uniendo las variables codigo8 y record_id
+datos_cohorte$codigo_participante<-paste0(datos_cohorte$codigo8,
+                                          "-",datos_cohorte$record_id)
+
+# - Quitar espacios en blanco sobrantes
+
+datos_cohorte<-datos_cohorte%>%
+  mutate(codigo_participante = gsub("\\s+", "", codigo_participante))%>%
+  mutate(codigo_participante=str_trim(codigo_participante))
+
+# - Eliminar los participantes COL-ICL-339,COL-ICL-545, COL-CUC-641 (solicitud por falla de selección)
+
+datos_cohorte <- datos_cohorte %>%
+  filter(!(codigo_participante %in% c("COL-ICL-339",
+                                      "COL-ICL-545",
+                                      "COL-CUC-641")))
+```
+
+
+
+```{r,include=FALSE}
+#### -------------- 2.2. Codificar las variables solicitadas ------------
+
+
+# --- SOCIODEMOGRÁFICAS -
+
+# ---- Edad
+
+datos_cohorte$fecha_consentimiento<-as.Date(datos_cohorte$fecha_consentimiento);class(datos_cohorte$fecha_consentimiento)
+datos_cohorte$fecha_nacimiento<-as.Date(datos_cohorte$fecha_nacimiento);class(datos_cohorte$fecha_nacimiento)
+
+
+datos_cohorte$edad<-round(time_length(difftime(datos_cohorte$fecha_consentimiento,
+                                           datos_cohorte$fecha_nacimiento),"year"),0)
+
+summary(datos_cohorte$edad)
+
+
+
+# ---- Sexo asignado al nacer
+
+datos_cohorte$sexo[datos_cohorte$sexo == 1]<-"Femenino"
+datos_cohorte$sexo[datos_cohorte$sexo == 2]<-"Masculino"
+datos_cohorte$sexo[datos_cohorte$sexo == 3]<-"Intersexual"
+
+
+# ---- Genero (clasificación de RedCap)
+
+datos_cohorte$genero[datos_cohorte$genero == 1]<-"Hombre"
+datos_cohorte$genero[datos_cohorte$genero == 2]<-"Mujer"
+datos_cohorte$genero[datos_cohorte$genero == 3]<-"No binario"
+datos_cohorte$genero[datos_cohorte$genero == 4]<-"Otro"
+
+
+# ---- Identidad de Genero
+
+datos_cohorte$genero2[datos_cohorte$sexo == "Femenino" & datos_cohorte$genero == "Mujer"]<-"Mujer cisgenero"
+datos_cohorte$genero2[datos_cohorte$sexo == "Masculino" & datos_cohorte$genero == "Hombre"]<-"Hombre cisgenero"
+
+#View(datos_cohorte[,c("sexo","genero","genero2")])
+
+datos_cohorte$genero2[datos_cohorte$sexo == "Femenino" & datos_cohorte$genero == "Hombre"]<-"Hombre transgenero"
+datos_cohorte$genero2[datos_cohorte$sexo == "Masculino" & datos_cohorte$genero == "Mujer"]<-"Mujer transgenero"
+
+datos_cohorte$genero2[datos_cohorte$sexo == "Femenino" & datos_cohorte$genero %in% c("No binario","Otro")]<-"Indefinido"
+datos_cohorte$genero2[datos_cohorte$sexo == "Masculino" & datos_cohorte$genero %in% c("No binario","Otro")]<-"Indefinido"
+
+
+# ---- Codificar grupos de VIH/PrEP/Factor de riesgo
+
+datos_cohorte$participante_convive_virus<-ifelse(datos_cohorte$participante_convive_virus == 1, "Si","No")
+
+datos_cohorte$participante_prep[datos_cohorte$participante_prep == 1]<-"Si"
+datos_cohorte$participante_prep[datos_cohorte$participante_prep == 2]<-"No"
+
+datos_cohorte$factor_riesgo<-ifelse(datos_cohorte$factor_riesgo == 1, "Si","No")
+
+#View(datos_cohorte[,c("participante_convive_virus","participante_prep","factor_riesgo")])
+
+
+# - otra variable
+
+datos_cohorte$confirmacion_entidad[datos_cohorte$participante_convive_virus == "Si"]<-"VIH"
+
+datos_cohorte$confirmacion_entidad[is.na(datos_cohorte$confirmacion_entidad) & datos_cohorte$participante_convive_virus == "No" &
+                             datos_cohorte$participante_prep == "Si" & datos_cohorte$factor_riesgo == "No"]<-"Prep"
+
+datos_cohorte$confirmacion_entidad[is.na(datos_cohorte$confirmacion_entidad) & datos_cohorte$participante_convive_virus == "No" &
+                             datos_cohorte$participante_prep == "No" & datos_cohorte$factor_riesgo == "Si"]<-"Factor de riesgo"
+
+
+# ---- Vive con VIH
+
+datos_cohorte$vih<-ifelse(datos_cohorte$confirmacion_entidad == "VIH","Si","No")
+
+
+# ---- Recuento CD4 (cél/µL)
+
+# Adjuntar conteos de CD4
+conteo_cd4 <- read_excel("20250520_Conteo_CD4.xlsx")
+
+conteo_cd4<-conteo_cd4%>%
+  mutate(codigo_participante = gsub("\\s+", "", codigo_participante))%>%
+  mutate(codigo_participante=str_trim(codigo_participante))
+
+# Contar cantidad de pacientes:
+
+length(unique(conteo_cd4$codigo_participante))
+
+
+# Adjuntar los cd4 a la base de ECA:
+
+datos_cohorte<-datos_cohorte %>%
+  left_join(conteo_cd4,by=c("codigo_participante"))
+
+
+#nvac<-datos_vacunados%>%group_by(codigo_participante)%>%summarise(n())
+summary(datos_cohorte$cd4)
+
+datos_cohorte$categorias_cd4<-NA
+
+datos_cohorte$categorias_cd4[datos_cohorte$cd4 >= 200 & datos_cohorte$cd4 <= 349]<-"VIH 200-349"
+datos_cohorte$categorias_cd4[datos_cohorte$cd4 >= 350 & datos_cohorte$cd4 <= 499]<-"VIH 350-499"
+datos_cohorte$categorias_cd4[datos_cohorte$cd4 >= 500 & datos_cohorte$cd4 <= 749]<-"VIH 500-749"
+datos_cohorte$categorias_cd4[datos_cohorte$cd4 >= 750 & datos_cohorte$cd4 <= 999]<-"VIH 750-999"
+datos_cohorte$categorias_cd4[datos_cohorte$cd4 >= 1000]<-"VIH mayor 1000"
+
+
+datos_cohorte$confirmacion_entidad<-as.character(datos_cohorte$confirmacion_entidad)
+
+
+#View(datos_cohorte[,c("codigo_participante","confirmacion_entidad","categorias_cd4")])
+
+datos_cohorte$categorias_cd4[datos_cohorte$confirmacion_entidad == "Prep" & datos_cohorte$categorias_cd4 %in% c("VIH 200-349","VIH 350-499","VIH 500-749","VIH 750-999","VIH mayor 1000")]<-NA
+
+
+
+# ---- Usuario de PrEP
+
+datos_cohorte$prep<-ifelse(datos_cohorte$confirmacion_entidad == "Prep","Si","No")
+
+
+
+# ----- Conductas sexules de riesgo
+
+# ---- Hombre que practica sexo con hombres (sólo para los que no son usuarios del PrEP)
+
+datos_cohorte$hombre_practica_sexo[datos_cohorte$hombre_practica_sexo == 1]<-"Si"
+datos_cohorte$hombre_practica_sexo[datos_cohorte$hombre_practica_sexo == 2]<-"No"
+
+
+# ---- Sexo transaccional
+
+datos_cohorte$participante_sexo_transaccional[datos_cohorte$participante_sexo_transaccional == 1]<-"Si"
+datos_cohorte$participante_sexo_transaccional[datos_cohorte$participante_sexo_transaccional == 2]<-"No"
+
+
+# ---- Múltiples parejas sexuales
+
+datos_cohorte$participante_mult_parejas[datos_cohorte$participante_mult_parejas == 1]<-"Si"
+datos_cohorte$participante_mult_parejas[datos_cohorte$participante_mult_parejas == 2]<-"No"
+
+
+#View(datos_cohorte[,c("confirmacion_entidad",
+#                  "hombre_practica_sexo","participante_sexo_transaccional","participante_mult_parejas")])
+
+
+# ---- Afiliación al sistema de salud
+
+datos_cohorte$afiliciacion_seguridad_social[datos_cohorte$afiliciacion_seguridad_social == 1]<-"Contributivo"
+datos_cohorte$afiliciacion_seguridad_social[datos_cohorte$afiliciacion_seguridad_social == 2]<-"Subsidiado"
+datos_cohorte$afiliciacion_seguridad_social[datos_cohorte$afiliciacion_seguridad_social == 3]<-"Especial"
+datos_cohorte$afiliciacion_seguridad_social[datos_cohorte$afiliciacion_seguridad_social == 4]<-"Otro"
+datos_cohorte$afiliciacion_seguridad_social[datos_cohorte$afiliciacion_seguridad_social == 5]<-"Ninguno"
+
+
+
+# ---- Escolaridad
+
+datos_cohorte$escolaridad2[datos_cohorte$escolaridad %in% c(1:3)]<-"Baja"
+datos_cohorte$escolaridad2[datos_cohorte$escolaridad %in% c(4:7)]<-"Media"
+datos_cohorte$escolaridad2[datos_cohorte$escolaridad %in% c(8:11)]<-"Alta"
+
+table(datos_cohorte$escolaridad2)
+
+
+# ---- Número de personas con quienes vive
+
+datos_cohorte$numero_personas_convive <- ifelse(datos_cohorte$numero_personas_convive_2 == 0,"Ninguna",
+                                            ifelse(datos_cohorte$numero_personas_convive_2 == 1,"Con 1 persona",
+                                                   ifelse(datos_cohorte$numero_personas_convive_2 %in% c(2,3),"Con 2 o 3 personas",
+                                                          "Con 4 personas o más")))
+
+
+#View(datos_cohorte[,c("numero_personas_convive_2","numero_personas_convive")])
+
+
+```
+
+
+```{r,include=FALSE}
+# Filtrar a los vacunados
+
+datos_cohorte <- datos_cohorte %>%
+  filter(codigo_participante %in% c(vacuna$codigo_participante))
+
+```
+
+
+
+<div style="text-align:center;">
+**Tabla 1. Características sociodemográficas de los pacientes con asignación del ECA**
+</div>
+
+
+
+```{r, include=FALSE}
+# Tabla completa
+
+# --- Edad
+
+shapiro.test(datos_cohorte$edad)
+
+
+edad<-data.frame(Variables="Mediana (RIC)",
+                 Total = paste(prettyNum(round(summary(datos_cohorte$edad)[3],2),big.mark = ".",decimal.mark = ","),
+                               paste0("(",
+                               prettyNum(round(summary(datos_cohorte$edad)[2],2),big.mark = ".",decimal.mark = ",")),
+                               "-",
+                        paste0(prettyNum(round(summary(datos_cohorte$edad)[5],2),big.mark = ".",decimal.mark = ","),
+                                      ")")))
+
+names(edad)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$edad),big.mark = ".",decimal.mark = ",")))
+
+
+# --- Sexo asignado al nacer
+
+(sex<-table(datos_cohorte$sexo))
+
+(prop_sex<-round(prop.table(sex),4))
+
+sex<-as.data.frame(sex)
+prop_sex<-as.data.frame(prop_sex)
+
+sex<-merge(sex,prop_sex,by=c("Var1"))
+
+sex$etiqueta<-paste(prettyNum(sex$Freq.x,big.mark = ".",decimal.mark = ","),
+                    paste0("(",prettyNum(sex$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+sex<-sex[,c(1,4)]
+
+sex$Var1<-as.character(sex$Var1)
+
+names(sex)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$sexo),big.mark = ".",decimal.mark = ",")))
+
+
+
+# --- Identidad de genero
+
+(genero2<-table(datos_cohorte$genero2))
+
+(prop_genero2<-round(prop.table(genero2),4))
+
+genero2<-as.data.frame(genero2)
+prop_genero2<-as.data.frame(prop_genero2)
+
+genero2<-merge(genero2,prop_genero2,by=c("Var1"))
+
+genero2$etiqueta<-paste(prettyNum(genero2$Freq.x,big.mark = ".",decimal.mark = ","),
+                paste0("(",prettyNum(genero2$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+genero2<-genero2[,c(1,4)]
+
+genero2$Var1<-as.character(genero2$Var1)
+
+names(genero2)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$genero2),big.mark = ".",decimal.mark = ",")))
+
+# --- Vive con VIH
+
+(vih<-table(datos_cohorte$vih))
+
+(prop_vih<-round(prop.table(vih),4))
+
+vih<-as.data.frame(vih)
+prop_vih<-as.data.frame(prop_vih)
+
+vih<-merge(vih,prop_vih,by=c("Var1"))
+
+vih$etiqueta<-paste(prettyNum(vih$Freq.x,big.mark = ".",decimal.mark = ","),
+                paste0("(",prettyNum(vih$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+vih<-vih[,c(1,4)]
+
+vih$Var1<-as.character(vih$Var1)
+
+names(vih)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$vih),big.mark = ".",decimal.mark = ",")))
+
+
+
+# --- Recuento CD4 (cél/µL)
+
+shapiro.test(datos_cohorte$cd4)
+
+cd4<-data.frame(Variables="Mediana (RIC)",
+                 Total = paste(prettyNum(round(summary(datos_cohorte$cd4)[3],2),big.mark = ".",decimal.mark = ","),
+                               paste0("(",
+                               prettyNum(round(summary(datos_cohorte$cd4)[2],2),big.mark = ".",decimal.mark = ",")),
+                               "-",
+                        paste0(prettyNum(round(summary(datos_cohorte$cd4)[5],2),big.mark = ".",decimal.mark = ","),
+                                      ")")))
+
+names(cd4)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$cd4),big.mark = ".",decimal.mark = ",")))
+
+
+
+# --- Categorías de CD4
+
+(cat_cd4<-table(datos_cohorte$categorias_cd4))
+
+(prop_cat_cd4<-round(prop.table(cat_cd4),4))
+
+cat_cd4<-as.data.frame(cat_cd4)
+prop_cat_cd4<-as.data.frame(prop_cat_cd4)
+
+cat_cd4<-merge(cat_cd4,prop_cat_cd4,by=c("Var1"))
+
+cat_cd4$etiqueta<-paste(prettyNum(cat_cd4$Freq.x,big.mark = ".",decimal.mark = ","),
+              paste0("(",prettyNum(cat_cd4$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+cat_cd4<-cat_cd4[,c(1,4)]
+
+cat_cd4$Var1<-as.character(cat_cd4$Var1)
+
+names(cat_cd4)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$categorias_cd4),big.mark = ".",decimal.mark = ",")))
+
+
+
+# --- Prep
+
+(prep<-table(datos_cohorte$prep))
+
+(prop_prep<-round(prop.table(prep),4))
+
+prep<-as.data.frame(prep)
+prop_prep<-as.data.frame(prop_prep)
+
+prep<-merge(prep,prop_prep,by=c("Var1"))
+
+prep$etiqueta<-paste(prettyNum(prep$Freq.x,big.mark = ".",decimal.mark = ","),
+              paste0("(",prettyNum(prep$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+prep<-prep[,c(1,4)]
+
+prep$Var1<-as.character(prep$Var1)
+
+names(prep)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$prep),big.mark = ".",decimal.mark = ",")))
+
+
+# ----- Conductas sexules de riesgo
+
+# ---- Hombre que practica sexo con hombres (sólo para los que no son usuarios del PrEP)
+
+(hpsh<-table(datos_cohorte$hombre_practica_sexo))
+
+(prop_hpsh<-round(prop.table(hpsh),4))
+
+hpsh<-as.data.frame(hpsh)
+prop_hpsh<-as.data.frame(prop_hpsh)
+
+hpsh<-merge(hpsh,prop_hpsh,by=c("Var1"))
+
+hpsh$etiqueta<-paste(prettyNum(hpsh$Freq.x,big.mark = ".",decimal.mark = ","),
+              paste0("(",prettyNum(hpsh$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+hpsh<-hpsh[,c(1,4)]
+
+hpsh$Var1<-as.character(hpsh$Var1)
+
+names(hpsh)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$hombre_practica_sexo),big.mark = ".",decimal.mark = ",")))
+
+
+# ---- Sexo transaccional
+
+(st<-table(datos_cohorte$participante_sexo_transaccional))
+
+(prop_st<-round(prop.table(st),4))
+
+st<-as.data.frame(st)
+prop_st<-as.data.frame(prop_st)
+
+st<-merge(st,prop_st,by=c("Var1"))
+
+st$etiqueta<-paste(prettyNum(st$Freq.x,big.mark = ".",decimal.mark = ","),
+              paste0("(",prettyNum(st$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+st<-st[,c(1,4)]
+
+st$Var1<-as.character(st$Var1)
+
+names(st)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$participante_sexo_transaccional),big.mark = ".",decimal.mark = ",")))
+
+
+# ---- Múltiples parejas sexuales
+
+(mps<-table(datos_cohorte$participante_mult_parejas))
+
+(prop_mps<-round(prop.table(mps),4))
+
+mps<-as.data.frame(mps)
+prop_mps<-as.data.frame(prop_mps)
+
+mps<-merge(mps,prop_mps,by=c("Var1"))
+
+mps$etiqueta<-paste(prettyNum(mps$Freq.x,big.mark = ".",decimal.mark = ","),
+              paste0("(",prettyNum(mps$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+mps<-mps[,c(1,4)]
+
+mps$Var1<-as.character(mps$Var1)
+
+names(mps)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$participante_mult_parejas),big.mark = ".",decimal.mark = ",")))
+
+
+
+# ---- Afiliación al sistema de salud
+
+(afil<-table(datos_cohorte$afiliciacion_seguridad_social))
+
+(prop_afil<-round(prop.table(afil),4))
+
+afil<-as.data.frame(afil)
+prop_afil<-as.data.frame(prop_afil)
+
+afil<-merge(afil,prop_afil,by=c("Var1"))
+
+afil$etiqueta<-paste(prettyNum(afil$Freq.x,big.mark = ".",decimal.mark = ","),
+            paste0("(",prettyNum(afil$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+afil<-afil[,c(1,4)]
+
+afil$Var1<-as.character(afil$Var1)
+
+names(afil)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$afiliciacion_seguridad_social),big.mark = ".",decimal.mark = ",")))
+
+
+
+# ---- Escolaridad
+
+(esco<-table(datos_cohorte$escolaridad2))
+
+(prop_esco<-round(prop.table(esco),4))
+
+esco<-as.data.frame(esco)
+prop_esco<-as.data.frame(prop_esco)
+
+esco<-merge(esco,prop_esco,by=c("Var1"))
+
+esco$etiqueta<-paste(prettyNum(esco$Freq.x,big.mark = ".",decimal.mark = ","),
+            paste0("(",prettyNum(esco$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+esco<-esco[,c(1,4)]
+
+esco$Var1<-as.character(esco$Var1)
+
+names(esco)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$escolaridad2),big.mark = ".",decimal.mark = ",")))
+
+
+# ---- Número de personas con quienes vive
+
+(convive<-table(datos_cohorte$numero_personas_convive))
+
+(prop_convive<-round(prop.table(convive),4))
+
+convive<-as.data.frame(convive)
+prop_convive<-as.data.frame(prop_convive)
+
+convive<-merge(convive,prop_convive,by=c("Var1"))
+
+convive$etiqueta<-paste(prettyNum(convive$Freq.x,big.mark = ".",decimal.mark = ","),
+            paste0("(",prettyNum(convive$Freq.y*100,big.mark = ".",decimal.mark = ","),")"))
+
+convive<-convive[,c(1,4)]
+
+convive$Var1<-as.character(convive$Var1)
+
+names(convive)<-c("Variables", paste("Total n =",prettyNum(length(datos_cohorte$numero_personas_convive),big.mark = ".",decimal.mark = ",")))
+
+
+```
+
+
+```{r, include=FALSE}
+tabla1<-rbind(c("Edad en años",""),
+              edad,
+              c("",""),
+              c("Sexo","n (%)"),
+              sex,
+              c("",""),
+              c("Identidad de género",""),
+              genero2,
+              c("",""),
+              c("Vive con VIH",""),
+              vih,
+              c("",""),
+              c("Recuento CD4 (cél/µL)",""),
+              cd4,
+              c("",""),
+              c("Categoria CD4 (cél/µL)",""),
+              cat_cd4,
+              c("",""),
+              c("Usuario de PrEP",""),
+              prep,
+              c("",""),
+              c("Conductas sexules de riesgo",""),
+              c("Hombre que practica sexo con hombres",""),
+              hpsh,
+              c("",""),
+               c("Sexo transaccional",""),
+              st,
+              c("",""),
+               c("Múltiples parejas sexuales",""),
+              mps,
+              c("",""),
+               c("Afiliación al sistema de salud",""),
+              afil,
+              c("",""),
+               c("Escolaridad",""),
+              esco,
+              c("",""),
+               c("Número de personas con quien convive",""),
+              convive)
+```
+
+
+```{r,echo=FALSE}
+tabla1
+```
+
+
+
+
